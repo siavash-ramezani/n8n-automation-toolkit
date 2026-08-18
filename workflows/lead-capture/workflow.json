@@ -1,0 +1,247 @@
+{
+  "name": "Lead Capture",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-capture",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0001-4a1a-9a1a-000000000001",
+      "name": "Webhook - Form Submission",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "lead-capture-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and format the incoming lead data\nconst items = $input.all();\n\nreturn items.map((item) => {\n  const body = item.json.body || item.json;\n\n  const name = (body.name || '').toString().trim();\n  const email = (body.email || '').toString().trim().toLowerCase();\n  const message = (body.message || '').toString().trim();\n\n  const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n  const errors = [];\n\n  if (!name) errors.push('name is required');\n  if (!email || !emailRegex.test(email)) errors.push('a valid email is required');\n\n  if (errors.length > 0) {\n    throw new Error(`Lead validation failed: ${errors.join(', ')}`);\n  }\n\n  return {\n    json: {\n      name,\n      email,\n      message: message || '(no message provided)',\n      source: 'website-form',\n      submittedAt: new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "id": "1a1b1c1d-0002-4a1a-9a1a-000000000002",
+      "name": "Validate & Format Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.example-crm.com/leads",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.CRM_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"name\": $json.name, \"email\": $json.email, \"message\": $json.message, \"source\": $json.source, \"submittedAt\": $json.submittedAt } }}",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0003-4a1a-9a1a-000000000003",
+      "name": "Send to CRM (placeholder)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-crm-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1a1b1c1d-0004-4a1a-9a1a-000000000004",
+      "name": "CRM Call Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-fallback-text",
+              "name": "slackText",
+              "type": "string",
+              "value": "=:warning: New lead captured, but CRM sync FAILED and needs manual follow-up.\\n*Name:* {{ $('Validate & Format Lead').item.json.name }}\\n*Email:* {{ $('Validate & Format Lead').item.json.email }}\\n*Message:* {{ $('Validate & Format Lead').item.json.message }}\\n*Submitted:* {{ $('Validate & Format Lead').item.json.submittedAt }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a1b1c1d-0005-4a1a-9a1a-000000000005",
+      "name": "Build Fallback Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-success-text",
+              "name": "slackText",
+              "type": "string",
+              "value": "=:tada: New lead captured and synced to CRM.\\n*Name:* {{ $('Validate & Format Lead').item.json.name }}\\n*Email:* {{ $('Validate & Format Lead').item.json.email }}\\n*Message:* {{ $('Validate & Format Lead').item.json.message }}\\n*Submitted:* {{ $('Validate & Format Lead').item.json.submittedAt }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a1b1c1d-0006-4a1a-9a1a-000000000006",
+      "name": "Build Success Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"text\": $json.slackText } }}",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0007-4a1a-9a1a-000000000007",
+      "name": "Send Slack Notification (placeholder)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"received\", \"name\": $('Validate & Format Lead').item.json.name } }}",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0008-4a1a-9a1a-000000000008",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Form Submission": {
+      "main": [
+        [
+          {
+            "node": "Validate & Format Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Format Lead": {
+      "main": [
+        [
+          {
+            "node": "Send to CRM (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to CRM (placeholder)": {
+      "main": [
+        [
+          {
+            "node": "CRM Call Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM Call Failed?": {
+      "main": [
+        [
+          {
+            "node": "Build Fallback Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Fallback Message": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Notification (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Success Message": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Notification (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Notification (placeholder)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "placeholder-instance-id"
+  }
+}

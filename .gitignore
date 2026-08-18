@@ -1,0 +1,14 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.local
+
+# Dependencies (in case any tooling gets added later)
+node_modules/
+
+# Editor
+.vscode/
+.idea/
