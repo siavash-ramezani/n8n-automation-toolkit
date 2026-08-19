@@ -7,7 +7,7 @@ A curated collection of production-style [n8n](https://n8n.io) workflows demonst
 | Workflow | Description | Status |
 |---|---|---|
 | [Lead Capture](workflows/lead-capture/README.md) | Webhook-triggered intake that validates form data, pushes leads to a CRM, and notifies a Slack channel — with fallback notification if the CRM call fails | ✅ Available |
-| AI Content Moderation | Automatically screen and flag/route user-submitted content using an AI model | 🔜 Coming soon |
+| [AI Content Moderation](workflows/ai-content-moderation/README.md) | LLM-classified first-pass review that auto-publishes approved content, routes flagged/rejected content to Slack for human follow-up, and fails safe to human review if the LLM call or parse fails | ✅ Available |
 | Scheduled Report Generator | Generate and deliver a recurring report on a schedule | 🔜 Coming soon |
 | Webhook Data Sync | Keep two systems in sync in response to incoming webhook events | 🔜 Coming soon |
 
@@ -16,7 +16,10 @@ A curated collection of production-style [n8n](https://n8n.io) workflows demonst
 ```
 n8n-automation-toolkit/
 ├── workflows/
-│   └── lead-capture/
+│   ├── lead-capture/
+│   │   ├── workflow.json   # Importable n8n workflow export
+│   │   └── README.md       # Workflow-specific documentation
+│   └── ai-content-moderation/
 │       ├── workflow.json   # Importable n8n workflow export
 │       └── README.md       # Workflow-specific documentation
 ├── .env.example             # Environment variables referenced by workflows (placeholders only)
