@@ -1,0 +1,396 @@
+{
+  "name": "AI Content Moderation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-content-moderation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2b2c2d2e-0001-4b2b-9b2b-000000000001",
+      "name": "Webhook - Content Submission",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 400],
+      "webhookId": "ai-content-moderation-webhook"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.LLM_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"model\": \"REPLACE_WITH_YOUR_MODEL\", \"max_tokens\": 500, \"messages\": [ { \"role\": \"user\", \"content\": \"You are a content moderation assistant. Classify the following user-submitted content as exactly one of \\\"approved\\\", \\\"flagged\\\", or \\\"rejected\\\", and give a short reason. Respond with ONLY a single valid JSON object in this exact shape and nothing else: {\\\"classification\\\": \\\"approved|flagged|rejected\\\", \\\"reason\\\": \\\"short explanation\\\"}.\\n\\nContent to classify:\\n\" + ($json.body?.text ?? $json.text) } ] } }}",
+        "options": {}
+      },
+      "id": "2b2c2d2e-0002-4b2b-9b2b-000000000002",
+      "name": "Call LLM for Classification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 400],
+      "onError": "continueRegularOutput",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the LLM's classification response. Fail-safe: any error here (failed HTTP\n// call, unparsable JSON, or an unexpected classification value) resolves to\n// \"flagged\" so the content is routed to a human instead of silently failing or\n// being auto-approved.\nconst items = $input.all();\nconst webhookData = $('Webhook - Content Submission').item.json;\nconst original = webhookData.body || webhookData;\n\nconst contentId = original.content_id;\nconst text = original.text;\nconst authorId = original.author_id;\n\nreturn items.map((item) => {\n  // continueOnFail on the HTTP node surfaces failures as item.json.error\n  if (item.json.error) {\n    return {\n      json: {\n        content_id: contentId,\n        text,\n        author_id: authorId,\n        classification: 'flagged',\n        reason: 'LLM API call failed - routed to human review as a fail-safe.',\n        llmFailed: true,\n      },\n    };\n  }\n\n  try {\n    const rawText = item.json.content?.[0]?.text || '';\n    const parsed = JSON.parse(rawText);\n\n    const allowed = ['approved', 'flagged', 'rejected'];\n    if (!allowed.includes(parsed.classification)) {\n      throw new Error(`Unexpected classification value: ${parsed.classification}`);\n    }\n\n    return {\n      json: {\n        content_id: contentId,\n        text,\n        author_id: authorId,\n        classification: parsed.classification,\n        reason: parsed.reason || '(no reason provided)',\n        llmFailed: false,\n      },\n    };\n  } catch (err) {\n    return {\n      json: {\n        content_id: contentId,\n        text,\n        author_id: authorId,\n        classification: 'flagged',\n        reason: `LLM response could not be parsed as valid JSON - routed to human review as a fail-safe. (${err.message})`,\n        llmFailed: true,\n      },\n    };\n  }\n});"
+      },
+      "id": "2b2c2d2e-0003-4b2b-9b2b-000000000003",
+      "name": "Parse LLM Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-llm-failed",
+              "leftValue": "={{ $json.llmFailed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2b2c2d2e-0004-4b2b-9b2b-000000000004",
+      "name": "LLM Call or Parse Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-approved",
+                    "leftValue": "={{ $json.classification }}",
+                    "rightValue": "approved",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "approved"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-flagged",
+                    "leftValue": "={{ $json.classification }}",
+                    "rightValue": "flagged",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "flagged"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-rejected",
+                    "leftValue": "={{ $json.classification }}",
+                    "rightValue": "rejected",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "rejected"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2b2c2d2e-0005-4b2b-9b2b-000000000005",
+      "name": "Classification Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.example-contentpass.com/content/publish",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"content_id\": $json.content_id, \"text\": $json.text, \"author_id\": $json.author_id, \"classification\": $json.classification, \"reason\": $json.reason } }}",
+        "options": {}
+      },
+      "id": "2b2c2d2e-0006-4b2b-9b2b-000000000006",
+      "name": "Publish Content (placeholder)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONTENT_MODERATION_SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"channel\": \"#content-review\", \"text\": \":mag: Content flagged for human review\\n*Content ID:* \" + $json.content_id + \"\\n*Author:* \" + $json.author_id + \"\\n*Reason:* \" + $json.reason + \"\\n*Text:* \" + $json.text } }}",
+        "options": {}
+      },
+      "id": "2b2c2d2e-0007-4b2b-9b2b-000000000007",
+      "name": "Notify #content-review (Slack placeholder)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 520]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.example-contentpass.com/moderation/log",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"content_id\": $json.content_id, \"author_id\": $json.author_id, \"classification\": $json.classification, \"reason\": $json.reason, \"text\": $json.text } }}",
+        "options": {}
+      },
+      "id": "2b2c2d2e-0008-4b2b-9b2b-000000000008",
+      "name": "Log Rejection (placeholder)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 660]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONTENT_MODERATION_SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"channel\": \"#content-rejected\", \"text\": \":no_entry: Content rejected\\n*Content ID:* \" + $json.content_id + \"\\n*Author:* \" + $json.author_id + \"\\n*Reason:* \" + $json.reason + \"\\n*Text:* \" + $json.text } }}",
+        "options": {}
+      },
+      "id": "2b2c2d2e-0009-4b2b-9b2b-000000000009",
+      "name": "Notify #content-rejected (Slack placeholder)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 660]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"processed\", \"content_id\": $json.content_id, \"classification\": $json.classification } }}",
+        "options": {}
+      },
+      "id": "2b2c2d2e-0010-4b2b-9b2b-000000000010",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1780, 480]
+    }
+  ],
+  "connections": {
+    "Webhook - Content Submission": {
+      "main": [
+        [
+          {
+            "node": "Call LLM for Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM for Classification": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Response": {
+      "main": [
+        [
+          {
+            "node": "LLM Call or Parse Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Call or Parse Failed?": {
+      "main": [
+        [
+          {
+            "node": "Notify #content-review (Slack placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Classification Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classification Switch": {
+      "main": [
+        [
+          {
+            "node": "Publish Content (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify #content-review (Slack placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Rejection (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Content (placeholder)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify #content-review (Slack placeholder)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Rejection (placeholder)": {
+      "main": [
+        [
+          {
+            "node": "Notify #content-rejected (Slack placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify #content-rejected (Slack placeholder)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "placeholder-instance-id"
+  }
+}
