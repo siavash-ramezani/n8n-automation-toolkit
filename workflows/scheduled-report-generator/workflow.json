@@ -1,0 +1,219 @@
+{
+  "name": "Scheduled Report Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "3c3d3e3f-0001-4c3c-9c3c-000000000001",
+      "name": "Schedule Trigger - Daily 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  plan,\n  COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') AS today_count,\n  COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '48 hours' AND created_at < NOW() - INTERVAL '24 hours') AS yesterday_count\nFROM subscriptions\nGROUP BY plan\nORDER BY plan;",
+        "options": {}
+      },
+      "id": "3c3d3e3f-0002-4c3c-9c3c-000000000002",
+      "name": "Query New Signups (Last 24h)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 400],
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER_POSTGRES_CREDENTIAL_ID",
+          "name": "Report DB (placeholder - configure in n8n)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-query-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3c3d3e3f-0003-4c3c-9c3c-000000000003",
+      "name": "Query Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-failure-subject",
+              "name": "subject",
+              "type": "string",
+              "value": "=⚠️ Daily Signups Report - Generation Failed"
+            },
+            {
+              "id": "assign-failure-html",
+              "name": "htmlBody",
+              "type": "string",
+              "value": "=<h2>Daily Signups Report - Generation Failed</h2><p>The scheduled report could not be generated because the database query failed. No signup data is included below - please check the report workflow and the database connection.</p><p><strong>Error:</strong> {{ $json.error }}</p><p><strong>Time:</strong> {{ $now.toISO() }}</p>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3c3d3e3f-0004-4c3c-9c3c-000000000004",
+      "name": "Build Failure Email",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate the per-plan today/yesterday counts returned by the query into\n// a single summary: totals, per-plan breakdown, and a day-over-day comparison.\nconst rows = $input.all().map((item) => item.json);\n\nconst totalToday = rows.reduce((sum, r) => sum + Number(r.today_count || 0), 0);\nconst totalYesterday = rows.reduce((sum, r) => sum + Number(r.yesterday_count || 0), 0);\n\nlet deltaLabel;\nif (totalYesterday === 0) {\n  deltaLabel = totalToday > 0 ? 'N/A (no signups yesterday)' : 'No change';\n} else {\n  const deltaPercent = (((totalToday - totalYesterday) / totalYesterday) * 100).toFixed(1);\n  const sign = deltaPercent > 0 ? '+' : '';\n  deltaLabel = `${sign}${deltaPercent}%`;\n}\n\nconst breakdown = rows\n  .map((r) => ({\n    plan: r.plan || 'unknown',\n    today: Number(r.today_count || 0),\n    yesterday: Number(r.yesterday_count || 0),\n  }))\n  .sort((a, b) => b.today - a.today);\n\nreturn [\n  {\n    json: {\n      reportDate: new Date().toISOString().slice(0, 10),\n      totalToday,\n      totalYesterday,\n      deltaLabel,\n      breakdown,\n    },\n  },\n];"
+      },
+      "id": "3c3d3e3f-0005-4c3c-9c3c-000000000005",
+      "name": "Aggregate & Summarize Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a simple HTML table report from the aggregated summary.\nconst data = $input.first().json;\n\nconst rows = data.breakdown\n  .map(\n    (b) => `\n  <tr>\n    <td style=\"padding:6px 12px;border:1px solid #ddd;\">${b.plan}</td>\n    <td style=\"padding:6px 12px;border:1px solid #ddd;text-align:right;\">${b.today}</td>\n    <td style=\"padding:6px 12px;border:1px solid #ddd;text-align:right;\">${b.yesterday}</td>\n  </tr>`\n  )\n  .join('');\n\nconst html = `\n<h2>Daily Signups Report - ${data.reportDate}</h2>\n<p><strong>Total new signups (last 24h):</strong> ${data.totalToday}</p>\n<p><strong>Change vs. previous day:</strong> ${data.deltaLabel}</p>\n<table style=\"border-collapse:collapse;font-family:sans-serif;font-size:14px;\">\n  <thead>\n    <tr>\n      <th style=\"padding:6px 12px;border:1px solid #ddd;text-align:left;background:#f4f4f4;\">Plan</th>\n      <th style=\"padding:6px 12px;border:1px solid #ddd;background:#f4f4f4;\">Today</th>\n      <th style=\"padding:6px 12px;border:1px solid #ddd;background:#f4f4f4;\">Yesterday</th>\n    </tr>\n  </thead>\n  <tbody>${rows}\n  </tbody>\n</table>`;\n\nreturn [\n  {\n    json: {\n      subject: `Daily Signups Report - ${data.reportDate}`,\n      htmlBody: html,\n    },\n  },\n];"
+      },
+      "id": "3c3d3e3f-0006-4c3c-9c3c-000000000006",
+      "name": "Format HTML Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "fromEmail": "reports@example.com",
+        "toEmail": "={{ $env.REPORT_RECIPIENT_EMAILS }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.htmlBody }}",
+        "options": {}
+      },
+      "id": "3c3d3e3f-0007-4c3c-9c3c-000000000007",
+      "name": "Send Report Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1340, 400],
+      "credentials": {
+        "smtp": {
+          "id": "PLACEHOLDER_SMTP_CREDENTIAL_ID",
+          "name": "Report SMTP (placeholder - configure in n8n)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger - Daily 08:00": {
+      "main": [
+        [
+          {
+            "node": "Query New Signups (Last 24h)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query New Signups (Last 24h)": {
+      "main": [
+        [
+          {
+            "node": "Query Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Failed?": {
+      "main": [
+        [
+          {
+            "node": "Build Failure Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate & Summarize Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failure Email": {
+      "main": [
+        [
+          {
+            "node": "Send Report Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate & Summarize Results": {
+      "main": [
+        [
+          {
+            "node": "Format HTML Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format HTML Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "placeholder-instance-id"
+  }
+}
