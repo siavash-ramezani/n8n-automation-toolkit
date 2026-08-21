@@ -1,6 +1,6 @@
 # n8n Automation Toolkit
 
-A curated collection of production-style [n8n](https://n8n.io) workflows demonstrating automation and integration skills — form/lead handling, notifications, error-tolerant API calls, and other patterns commonly needed in real business automation. Each workflow is documented, exported as importable JSON, and built with credentials kept out of the repo (environment variables and placeholder URLs only).
+A curated collection of production-style [n8n](https://n8n.io) workflows demonstrating automation and integration skills — form/lead handling, AI-assisted content moderation, scheduled reporting, and idempotent system-to-system sync. Each workflow is documented, exported as importable JSON, and built with credentials kept out of the repo (environment variables and placeholder URLs only). This first set of four core workflows is complete; see below for what's in it.
 
 ## Workflows
 
@@ -9,7 +9,7 @@ A curated collection of production-style [n8n](https://n8n.io) workflows demonst
 | [Lead Capture](workflows/lead-capture/README.md) | Webhook-triggered intake that validates form data, pushes leads to a CRM, and notifies a Slack channel — with fallback notification if the CRM call fails | ✅ Available |
 | [AI Content Moderation](workflows/ai-content-moderation/README.md) | LLM-classified first-pass review that auto-publishes approved content, routes flagged/rejected content to Slack for human follow-up, and fails safe to human review if the LLM call or parse fails | ✅ Available |
 | [Scheduled Report Generator](workflows/scheduled-report-generator/README.md) | Daily cron-triggered database query that summarizes new signups with a day-over-day comparison and emails an HTML report, falling back to a "generation failed" email if the query errors | ✅ Available |
-| Webhook Data Sync | Keep two systems in sync in response to incoming webhook events | 🔜 Coming soon |
+| [Webhook Data Sync](workflows/webhook-data-sync/README.md) | Validates and transforms incoming System A events, upserts/deletes the matching record in System B with an idempotency lookup to guard against duplicate webhook retries, and retries with a Slack alert if the write still fails | ✅ Available |
 
 ## Repository structure
 
@@ -22,7 +22,10 @@ n8n-automation-toolkit/
 │   ├── ai-content-moderation/
 │   │   ├── workflow.json   # Importable n8n workflow export
 │   │   └── README.md       # Workflow-specific documentation
-│   └── scheduled-report-generator/
+│   ├── scheduled-report-generator/
+│   │   ├── workflow.json   # Importable n8n workflow export
+│   │   └── README.md       # Workflow-specific documentation
+│   └── webhook-data-sync/
 │       ├── workflow.json   # Importable n8n workflow export
 │       └── README.md       # Workflow-specific documentation
 ├── .env.example             # Environment variables referenced by workflows (placeholders only)

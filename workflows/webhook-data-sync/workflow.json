@@ -1,0 +1,622 @@
+{
+  "name": "Webhook Data Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook-data-sync",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4d4e4f4g-0001-4d4d-9d4d-000000000001",
+      "name": "Webhook - System A Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 500],
+      "webhookId": "webhook-data-sync-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate the incoming payload shape instead of letting a malformed event crash the run.\nconst items = $input.all();\n\nreturn items.map((item) => {\n  const body = item.json.body || item.json;\n  const id = body.id;\n  const type = body.type;\n  const data = body.data;\n\n  const validTypes = ['created', 'updated', 'deleted'];\n  const errors = [];\n\n  if (!id || typeof id !== 'string') errors.push('id is required and must be a string');\n  if (!validTypes.includes(type)) errors.push(`type must be one of ${validTypes.join(', ')}`);\n  if (type !== 'deleted' && (!data || typeof data !== 'object')) {\n    errors.push('data object is required for created/updated events');\n  }\n\n  return {\n    json: {\n      valid: errors.length === 0,\n      validationError: errors.join('; '),\n      id: id || null,\n      type: type || null,\n      data: data || {},\n    },\n  };\n});"
+      },
+      "id": "4d4e4f4g-0002-4d4d-9d4d-000000000002",
+      "name": "Validate Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-payload-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0003-4d4d-9d4d-000000000003",
+      "name": "Payload Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 500]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-invalid-status",
+              "name": "status",
+              "type": "string",
+              "value": "rejected"
+            },
+            {
+              "id": "assign-invalid-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Payload rejected: {{ $json.validationError }}"
+            },
+            {
+              "id": "assign-invalid-entity-id",
+              "name": "entity_id",
+              "type": "string",
+              "value": "={{ $json.id || 'unknown' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0004-4d4d-9d4d-000000000004",
+      "name": "Log Invalid Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Map System A's field names/shape onto what System B expects and normalize dates.\nconst item = $input.first().json;\n\nfunction normalizeDate(value) {\n  if (!value) return null;\n  const d = new Date(value);\n  return isNaN(d.getTime()) ? null : d.toISOString();\n}\n\nconst systemBPayload = {\n  external_id: item.id,\n  name: item.data.full_name || item.data.name || null,\n  email_address: item.data.email || null,\n  synced_version: normalizeDate(item.data.updated_at) || new Date().toISOString(),\n  sync_status: item.data.status || null,\n};\n\nreturn [\n  {\n    json: {\n      entityId: item.id,\n      eventType: item.type,\n      systemBPayload,\n    },\n  },\n];"
+      },
+      "id": "4d4e4f4g-0005-4d4d-9d4d-000000000005",
+      "name": "Transform to System B Shape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 620]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.example-systemb.com/records/{{ $json.entityId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SYSTEM_B_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "4d4e4f4g-0006-4d4d-9d4d-000000000006",
+      "name": "Lookup Existing Record in System B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 620]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Idempotency safeguard: compare System B's current state against what we're about\n// to write. Webhook delivery is at-least-once, so retries of the same event are\n// expected - this stops a retried webhook from producing a duplicate write.\nconst lookup = $input.first().json;\nconst ctx = $('Transform to System B Shape').item.json;\n\nconst recordExists = lookup.statusCode === 200 && lookup.body && lookup.body.external_id;\nconst lookupUnexpectedError = lookup.statusCode && lookup.statusCode !== 200 && lookup.statusCode !== 404;\n\nlet alreadySynced = false;\nlet reason = '';\n\nif (lookupUnexpectedError) {\n  // Fail open: don't block a legitimate write because the idempotency check itself\n  // had trouble - a possible duplicate write is safer than a silently dropped sync.\n  alreadySynced = false;\n  reason = `Idempotency lookup returned unexpected status ${lookup.statusCode} - proceeding with write anyway`;\n} else if (ctx.eventType === 'deleted') {\n  alreadySynced = !recordExists;\n  reason = alreadySynced\n    ? 'Record already absent from System B - delete is a no-op'\n    : 'Record still present in System B - proceeding with delete';\n} else {\n  alreadySynced = Boolean(recordExists && lookup.body.synced_version === ctx.systemBPayload.synced_version);\n  reason = alreadySynced\n    ? 'System B already has this exact version - skipping duplicate write'\n    : 'System B is missing or out of date - proceeding with write';\n}\n\nreturn [\n  {\n    json: {\n      entityId: ctx.entityId,\n      eventType: ctx.eventType,\n      systemBPayload: ctx.systemBPayload,\n      alreadySynced,\n      reason,\n    },\n  },\n];"
+      },
+      "id": "4d4e4f4g-0007-4d4d-9d4d-000000000007",
+      "name": "Check Idempotency",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 620]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-already-synced",
+              "leftValue": "={{ $json.alreadySynced }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0008-4d4d-9d4d-000000000008",
+      "name": "Already Synced?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 620]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-skipped-status",
+              "name": "status",
+              "type": "string",
+              "value": "skipped_already_synced"
+            },
+            {
+              "id": "assign-skipped-message",
+              "name": "message",
+              "type": "string",
+              "value": "={{ $json.reason }}"
+            },
+            {
+              "id": "assign-skipped-entity-id",
+              "name": "entity_id",
+              "type": "string",
+              "value": "={{ $json.entityId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0009-4d4d-9d4d-000000000009",
+      "name": "Log Skipped - Already Synced",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1780, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-event-deleted",
+              "leftValue": "={{ $json.eventType }}",
+              "rightValue": "deleted",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0010-4d4d-9d4d-000000000010",
+      "name": "Event Type: Deleted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1780, 700]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://api.example-systemb.com/records/{{ $json.entityId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SYSTEM_B_API_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0011-4d4d-9d4d-000000000011",
+      "name": "Delete Record in System B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 620],
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://api.example-systemb.com/records/{{ $json.entityId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SYSTEM_B_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.systemBPayload }}",
+        "options": {}
+      },
+      "id": "4d4e4f4g-0012-4d4d-9d4d-000000000012",
+      "name": "Upsert Record in System B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 780],
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-write-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0013-4d4d-9d4d-000000000013",
+      "name": "Write Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2220, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SYNC_FAILURE_SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"text\": \":rotating_light: Webhook Data Sync failed after retries\\n*Entity ID:* \" + $('Check Idempotency').item.json.entityId + \"\\n*Event type:* \" + $('Check Idempotency').item.json.eventType + \"\\n*Error:* \" + JSON.stringify($json.error) + \"\\n*Payload:* ```\" + JSON.stringify($('Check Idempotency').item.json.systemBPayload) + \"```\" } }}",
+        "options": {}
+      },
+      "id": "4d4e4f4g-0014-4d4d-9d4d-000000000014",
+      "name": "Send Slack Failure Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2440, 580]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-failed-status",
+              "name": "status",
+              "type": "string",
+              "value": "sync_failed"
+            },
+            {
+              "id": "assign-failed-message",
+              "name": "message",
+              "type": "string",
+              "value": "Write to System B failed after retries - alerted via Slack for manual follow-up."
+            },
+            {
+              "id": "assign-failed-entity-id",
+              "name": "entity_id",
+              "type": "string",
+              "value": "={{ $('Check Idempotency').item.json.entityId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0015-4d4d-9d4d-000000000015",
+      "name": "Log Write Failed",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2660, 580]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-succeeded-status",
+              "name": "status",
+              "type": "string",
+              "value": "synced"
+            },
+            {
+              "id": "assign-succeeded-message",
+              "name": "message",
+              "type": "string",
+              "value": "={{ 'Successfully ' + ($('Check Idempotency').item.json.eventType === 'deleted' ? 'deleted from' : 'upserted into') + ' System B' }}"
+            },
+            {
+              "id": "assign-succeeded-entity-id",
+              "name": "entity_id",
+              "type": "string",
+              "value": "={{ $('Check Idempotency').item.json.entityId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4d4e4f4g-0016-4d4d-9d4d-000000000016",
+      "name": "Log Write Succeeded",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2440, 780]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": $json.status, \"message\": $json.message, \"entity_id\": $json.entity_id } }}",
+        "options": {}
+      },
+      "id": "4d4e4f4g-0017-4d4d-9d4d-000000000017",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2880, 500]
+    }
+  ],
+  "connections": {
+    "Webhook - System A Event": {
+      "main": [
+        [
+          {
+            "node": "Validate Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Payload": {
+      "main": [
+        [
+          {
+            "node": "Payload Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload Valid?": {
+      "main": [
+        [
+          {
+            "node": "Transform to System B Shape",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Invalid Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Invalid Payload": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform to System B Shape": {
+      "main": [
+        [
+          {
+            "node": "Lookup Existing Record in System B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Existing Record in System B": {
+      "main": [
+        [
+          {
+            "node": "Check Idempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Idempotency": {
+      "main": [
+        [
+          {
+            "node": "Already Synced?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Synced?": {
+      "main": [
+        [
+          {
+            "node": "Log Skipped - Already Synced",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Event Type: Deleted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Skipped - Already Synced": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event Type: Deleted?": {
+      "main": [
+        [
+          {
+            "node": "Delete Record in System B",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upsert Record in System B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Record in System B": {
+      "main": [
+        [
+          {
+            "node": "Write Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Record in System B": {
+      "main": [
+        [
+          {
+            "node": "Write Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Failed?": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Write Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Failure Alert": {
+      "main": [
+        [
+          {
+            "node": "Log Write Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Write Failed": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Write Succeeded": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "placeholder-instance-id"
+  }
+}
