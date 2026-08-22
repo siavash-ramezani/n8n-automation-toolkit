@@ -1,10 +1,18 @@
 # OS junk
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Environment / secrets
 .env
 .env.local
+.env.*.local
+
+# n8n local runtime data & credential exports (never commit real credentials)
+.n8n/
+credentials.json
+n8n_credentials*.json
+*.credentials.json
 
 # Dependencies (in case any tooling gets added later)
 node_modules/
@@ -12,3 +20,5 @@ node_modules/
 # Editor
 .vscode/
 .idea/
+*.swp
+*.swo
