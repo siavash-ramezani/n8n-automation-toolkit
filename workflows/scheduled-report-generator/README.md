@@ -6,27 +6,15 @@ Key metrics (signups, conversions, etc.) usually live in a database that nobody 
 
 ## Flow diagram
 
-```
-Schedule Trigger (daily, cron-configurable — default 08:00)
-        |
-        v
-Query New Signups (Last 24h)   (Postgres, placeholder connection —
-                                 per-plan today vs. yesterday counts,
-                                 continues on failure instead of stopping the run)
-        |
-        v
-Query Failed?   (IF)
-   |                          \
-   | true (query errored)      | false (query succeeded)
-   v                            v
-Build Failure Email       Aggregate & Summarize Results
-(fallback message,               |
- includes the error)             v
-   |                        Format HTML Report
-   |                              |
-   +--------------+---------------+
-                  v
-          Send Report Email
+```mermaid
+flowchart TD
+    A["Schedule Trigger: Daily 08:00"] --> B["Query New Signups (Last 24h)"]
+    B --> C{"Query Failed?"}
+    C -->|Yes| D["Build Failure Email"]
+    C -->|No| E["Aggregate & Summarize Results"]
+    E --> F["Format HTML Report"]
+    D --> G["Send Report Email"]
+    F --> G
 ```
 
 ## Nodes used

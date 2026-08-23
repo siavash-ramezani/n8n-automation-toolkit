@@ -6,61 +6,28 @@ Keeping two systems in sync usually means either polling one of them constantly 
 
 ## Flow diagram
 
-```
-Webhook (System A event: id, type [created/updated/deleted], data)
-        |
-        v
-Validate Payload   (Code — checks required fields/types; malformed
-                     payloads are rejected and logged, not thrown)
-        |
-        v
-Payload Valid?   (IF)
-   |                    \
-   | false (invalid)      | true (valid)
-   v                       v
-Log Invalid Payload   Transform to System B Shape
-   |                  (Code — maps field names, normalizes dates)
-   |                       |
-   |                       v
-   |               Lookup Existing Record in System B
-   |               (HTTP GET, placeholder endpoint)
-   |                       |
-   |                       v
-   |               Check Idempotency   (Code — compares System B's
-   |               current state to what we're about to write)
-   |                       |
-   |                       v
-   |               Already Synced?   (IF)
-   |                  |                    \
-   |                  | true (no-op)         | false (needs write)
-   |                  v                       v
-   |         Log Skipped -           Event Type: Deleted?   (IF)
-   |         Already Synced             |                  \
-   |                  |                 | true               | false
-   |                  |                 v                    v
-   |                  |          Delete Record in      Upsert Record in
-   |                  |          System B (DELETE,      System B (PUT,
-   |                  |          retry on fail)         retry on fail)
-   |                  |                 |                    |
-   |                  |                 +---------+----------+
-   |                  |                           v
-   |                  |                    Write Failed?   (IF)
-   |                  |                       |                  \
-   |                  |                       | true (still fails  | false (succeeded)
-   |                  |                       |  after retries)     |
-   |                  |                       v                     v
-   |                  |               Send Slack Failure     Log Write Succeeded
-   |                  |               Alert (placeholder            |
-   |                  |               webhook, includes             |
-   |                  |               failed payload)                |
-   |                  |                       |                      |
-   |                  |                       v                      |
-   |                  |               Log Write Failed                |
-   |                  |                       |                      |
-   +------------------+-----------------------+----------------------+
-                                    |
-                                    v
-                          Respond to Webhook
+```mermaid
+flowchart TD
+    A["Webhook: System A Event"] --> B["Validate Payload"]
+    B --> C{"Payload Valid?"}
+    C -->|No| D["Log Invalid Payload"]
+    C -->|Yes| E["Transform to System B Shape"]
+    E --> F["Lookup Existing Record in System B"]
+    F --> G["Check Idempotency"]
+    G --> H{"Already Synced?"}
+    H -->|Yes| I["Log Skipped - Already Synced"]
+    H -->|No| J{"Event Type: Deleted?"}
+    J -->|Yes| K["Delete Record in System B"]
+    J -->|No| L["Upsert Record in System B"]
+    K --> M{"Write Failed?"}
+    L --> M
+    M -->|Yes| N["Send Slack Failure Alert"]
+    M -->|No| O["Log Write Succeeded"]
+    N --> P["Log Write Failed"]
+    D --> Q["Respond to Webhook"]
+    I --> Q
+    P --> Q
+    O --> Q
 ```
 
 ## Nodes used

@@ -6,29 +6,16 @@ Website contact/lead forms are often just an email that lands in an inbox and ge
 
 ## Flow diagram
 
-```
-Webhook (form submission: name, email, message)
-        |
-        v
-Validate & Format Lead   (trim/normalize fields, check required name + email format)
-        |
-        v
-Send to CRM   (HTTP Request -> placeholder CRM endpoint, continues on failure)
-        |
-        v
-CRM Call Failed?  (IF)
-   |                \
-   | true (failed)    | false (succeeded)
-   v                  v
-Build Fallback      Build Success
-Message              Message
-   |                  |
-   +--------+---------+
-            v
-   Send Slack Notification   (HTTP Request -> placeholder Slack webhook)
-            |
-            v
-   Respond to Webhook  (acknowledge the form submission)
+```mermaid
+flowchart TD
+    A["Webhook: Form Submission"] --> B["Validate & Format Lead"]
+    B --> C["Send to CRM"]
+    C --> D{"CRM Call Failed?"}
+    D -->|Yes| E["Build Fallback Message"]
+    D -->|No| F["Build Success Message"]
+    E --> G["Send Slack Notification"]
+    F --> G
+    G --> H["Respond to Webhook"]
 ```
 
 ## Nodes used
