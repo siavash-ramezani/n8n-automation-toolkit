@@ -6,38 +6,23 @@ User-submitted content (comments, posts, listings, etc.) usually needs a first-p
 
 ## Flow diagram
 
+```mermaid
+flowchart TD
+    A["Webhook: Content Submission"] --> B["Call LLM for Classification"]
+    B --> C["Parse LLM Response"]
+    C --> D{"LLM Call or Parse Failed?"}
+    D -->|Yes| E["Notify #content-review (fail-safe)"]
+    D -->|No| F{"Classification Switch"}
+    F -->|approved| G["Publish Content"]
+    F -->|flagged| E
+    F -->|rejected| H["Log Rejection"]
+    H --> I["Notify #content-rejected"]
+    G --> J["Respond to Webhook"]
+    E --> J
+    I --> J
 ```
-Webhook (content submission: content_id, text, author_id)
-        |
-        v
-Call LLM for Classification   (HTTP Request -> placeholder LLM endpoint,
-                                asks for JSON: {classification, reason};
-                                continues on failure instead of stopping the run)
-        |
-        v
-Parse LLM Response   (Code node — parses the JSON, flags llmFailed=true
-                       if the call errored or the response wasn't valid JSON)
-        |
-        v
-LLM Call or Parse Failed?   (IF)
-   |                              \
-   | true (LLM/parse failure)      | false (LLM responded with valid JSON)
-   v                                v
-Notify #content-review        Classification Switch
-(fail-safe: treated                 |        |         \
- as "flagged")                approved    flagged      rejected
-                                  |           |             |
-                                  v           v             v
-                            Publish      Notify        Log Rejection
-                            Content    #content-review        |
-                                  |           |                v
-                                  |           |         Notify #content-rejected
-                                  |           |                |
-                                  +-----------+----------------+
-                                              |
-                                              v
-                                    Respond to Webhook
-```
+
+A failed or unparsable LLM call (top path) and a normal `flagged` classification (bottom path) both land on the same **Notify #content-review** node — the fail-safe reuses the regular human-review channel rather than needing a separate alert path.
 
 ## Nodes used
 

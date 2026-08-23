@@ -2,6 +2,37 @@
 
 A curated collection of production-style [n8n](https://n8n.io) workflows demonstrating automation and integration skills — form/lead handling, AI-assisted content moderation, scheduled reporting, and idempotent system-to-system sync. Each workflow is documented, exported as importable JSON, and built with credentials kept out of the repo (environment variables and placeholder URLs only). This first set of four core workflows is complete; see below for what's in it.
 
+## At a glance
+
+```mermaid
+flowchart LR
+    subgraph Triggers
+        WH1["Form Submitted"]
+        WH2["Content Submitted"]
+        WH3["System A Event"]
+        CRON["Daily 08:00 Schedule"]
+    end
+
+    subgraph Workflows
+        LC["Lead Capture"]
+        ACM["AI Content Moderation"]
+        WDS["Webhook Data Sync"]
+        SRG["Scheduled Report Generator"]
+    end
+
+    WH1 -->|webhook| LC
+    WH2 -->|webhook| ACM
+    WH3 -->|webhook| WDS
+    CRON -->|schedule| SRG
+
+    LC --> O1["CRM + Slack"]
+    ACM --> O2["Publish/Log + Slack"]
+    WDS --> O3["System B + Slack"]
+    SRG --> O4["Email Report"]
+```
+
+Three of the four workflows are webhook-triggered (react to an external event in near real-time); the fourth runs on a daily schedule. See each workflow's own README for its full flow, including branches and error handling.
+
 ## Workflows
 
 | Workflow | Description | Status |
@@ -32,13 +63,9 @@ n8n-automation-toolkit/
 └── README.md                 # This file
 ```
 
-## Credentials & safety
-
-No workflow in this repo contains real API keys, tokens, or webhook URLs. Workflows reference environment variables (e.g. `CRM_API_KEY`, `SLACK_WEBHOOK_URL`) that you must configure in your own n8n instance. See each workflow's README for the specific variables it needs, and [.env.example](.env.example) for the full list.
-
 ## Security & Credentials
 
-- **Every `workflow.json` in this repo is safe to share publicly.** They contain no real API keys, tokens, passwords, or webhook URLs — only placeholder endpoints (e.g. `api.example-crm.com`), `$env.VARIABLE_NAME` expressions, and, where a workflow uses n8n's built-in credential system (Postgres, SMTP), a generic credential *reference* (a placeholder id/name) rather than the credential itself. n8n never exports real credential values into workflow JSON by design, and this repo doesn't add any on top of that.
+- **Every `workflow.json` in this repo is safe to share publicly.** They contain no real API keys, tokens, passwords, or webhook URLs — only placeholder endpoints (e.g. `api.example-crm.com`), `$env.VARIABLE_NAME` expressions, and, where a workflow uses n8n's built-in credential system (Postgres, SMTP), a generic credential *reference* (a placeholder id/name) rather than the credential itself. n8n never exports real credential values into workflow JSON by design, and this repo doesn't add any on top of that. See each workflow's README for the specific variables it needs, and [.env.example](.env.example) for the full list.
 - **Setting up real credentials locally:**
   1. Copy [.env.example](.env.example) to `.env` and fill in real values for the workflow(s) you're using.
   2. For values consumed directly by node expressions (e.g. `$env.CRM_API_KEY`, `$env.SLACK_WEBHOOK_URL`), make sure your n8n instance loads that `.env` file (or set the variables in your instance's environment directly).
