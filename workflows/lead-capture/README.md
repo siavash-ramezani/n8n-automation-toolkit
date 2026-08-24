@@ -52,6 +52,10 @@ Setup steps:
 3. Create a real Slack incoming webhook (Slack → Apps → Incoming Webhooks) and put that URL in `SLACK_WEBHOOK_URL` — do not paste it directly into the node.
 4. Activate the workflow and point your form's submission handler at the Webhook node's production URL.
 
+## Fallback behavior
+
+If the **Send to CRM** node fails (outage, timeout, bad credentials, etc.), the workflow does not fail silently. `continueOnFail` lets execution continue past the error, the **CRM Call Failed?** IF node detects it, and **Build Fallback Message** composes a Slack message that explicitly flags the CRM push as failed instead of the normal success message. Either way, **Send Slack Notification** still fires and **Respond to Webhook** still acknowledges the submission — the sales/support team always hears about the lead, even when the CRM write breaks.
+
 ## Testing
 
 Send a test POST request to the webhook (replace the URL with your local/dev n8n webhook URL):
